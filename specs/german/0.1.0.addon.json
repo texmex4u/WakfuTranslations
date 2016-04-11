@@ -1,0 +1,17 @@
+{
+  "name": "german",
+  "version": "0.1.0",
+  "api": "~> 1.45.132",
+  "title": "Deutsch",
+  "description": "Deutscher Bildschirmtext",
+  "keywords": [
+    "german",
+    "deutsch"
+  ],
+  "homepage": "http://www.wakfu-german.de",
+  "license": "MIT",
+  "author": "Texmex <texmex@wakfu-german.de>",
+  "files": [
+    "i18n_de.jar"
+  ]
+}
