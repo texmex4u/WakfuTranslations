@@ -1,3 +1,7 @@
+# OS X / Linux
+.DS_Store
+*.swp
+
 # Logs
 logs
 *.log
@@ -31,3 +35,6 @@ node_modules
 
 # Optional REPL history
 .node_repl_history
+
+# Python
+*.pyc
