@@ -1,0 +1,6 @@
+{
+  "game": "Wakfu",
+  "cdn": "https://cdn.rawgit.com/texmex4u/WakfuTranslations/{channel}/releases/{name}/{version}.zip",
+  "script": "scripts/install.js",
+  "homepage": "http://www.wakfu-german.de"
+}
