@@ -20,8 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import os, collections, datetime
-import polib, jprops
+import os, collections, datetime, hashlib, re
+import polib
 
 from pytz import timezone
 from datetime import datetime
@@ -86,6 +86,26 @@ filters = {
     'law-descriptions': lambda key: key.startswith('content.98.'),
 }
 
+RE_PROPERTY = re.compile(r'([^=]+)=(.*)\n')
+def iter_properties(f):
+    l = 0
+    for line in f:
+        l += 1
+        m = RE_PROPERTY.match(line.decode('utf8'))
+        if m is None:
+            raise ValueError("Invalid line #%d: %s" % (l, line))
+        else:
+            yield m.group(1), m.group(2).replace('\\n', '\n')
+
+def load_properties(f):
+    return collections.OrderedDict(iter_properties(f))
+
+def write_property(f, key, value):
+    f.write('%s=%s\n' % (key.encode('utf8'), value.replace('\n', '\\n').encode('utf8')))
+
+def quick_hash(s):
+    return hashlib.md5(s.encode('utf8')).digest()
+
 class TranslationCategory(object):
     def __init__(self, name, filter, version, rev_date, language):
         self.name = name
@@ -124,22 +144,39 @@ class TranslationCategory(object):
                 if entry.msgstr != '':
                     self.dict_target[entry.comment] = entry.msgstr
 
-        self.dups = set()
+        self.dups = {}
 
     def add(self, key, value_fr, value_en, value_target):
         if not self.filter(key):
             return False
 
-        if value_fr not in self.dups:
-            self.dups.add(value_fr)
+        h = quick_hash(value_fr + value_en)
+        if not self.dups.has_key(h):
+            self.dups[h] = True
             self.po_en.append(polib.POEntry(msgid=value_fr, msgstr=value_en, comment=key))
             self.po_target.append(polib.POEntry(msgid=value_fr, msgstr=self.dict_target.get(key, value_target), comment=key))
 
         return True
 
+    def get(self, key, value_fr, value_en):
+        if not self.filter(key):
+            return None
+
+        h = quick_hash(value_fr + value_en)
+        value_target = self.dups.get(h)
+        if value_target is not None:
+            return value_target
+
+        value_target = self.dict_target.get(key, value_en)
+        if value_target == '':
+            value_target = value_fr
+
+        self.dups[h] = value_target
+        return value_target
+
     def save(self):
         self.po_en.save(os.path.join(self.name, 'en.po'))
-        self.po_target.save(os.path.join(self.name, self.po_target_file))
+        self.po_target.save(self.po_target_file)
 
 def make_categories(version, rev_date, language):
     categories = []
@@ -148,17 +185,35 @@ def make_categories(version, rev_date, language):
     categories.append(TranslationCategory('uncategorized', lambda key: True, version, rev_date, language))
     return categories
 
-def process_translations(texts_fr, texts_en, texts_target, categories):
+def disassemble_translations(texts_fr, texts_en, texts_target, categories):
     counter = 0
     for key, value_fr in texts_fr.iteritems():
         if value_fr == '':
             continue
 
-        value_fr = value_fr.encode('latin1').decode('utf8')
-        value_en = texts_en.get(key, '').encode('latin1').decode('utf8')
-        value_target = texts_target.get(key, '').encode('latin1').decode('utf8')
+        value_fr = value_fr
+        value_en = texts_en.get(key, '')
+        value_target = texts_target.get(key, '')
         for category in categories:
             if category.add(key, value_fr, value_en, value_target):
+                break
+
+        counter += 1
+    return counter
+
+def assemble_translations(texts_fr, texts_en, texts_target, categories):
+    counter = 0
+    for key, value_fr in texts_fr.iteritems():
+        if value_fr == '':
+            texts_target[key] = ''
+            continue
+
+        value_fr = value_fr
+        value_en = texts_en.get(key, '')
+        for category in categories:
+            value_target = category.get(key, value_fr, value_en)
+            if value_target is not None:
+                texts_target[key] = value_target
                 break
 
         counter += 1
@@ -168,8 +223,9 @@ if __name__ == "__main__":
     import argparse, sys
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("version", help="Game version")
-    parser.add_argument("language", help="Target language", choices=languages.keys(), default="de")
+    parser.add_argument("language", nargs="?", help="Target language", choices=languages.keys(), default="de")
+    parser.add_argument("version", nargs="?", help="Game version", default="1")
+    parser.add_argument("-a", "--assemble", help="Assemble the target properties file instead of disassembling", action="store_true")
 
     args = parser.parse_args()
 
@@ -179,29 +235,37 @@ if __name__ == "__main__":
 
     print "Reading 'texts_fr.properties'..."
     with open('texts_fr.properties', 'rb') as f:
-        texts_fr = jprops.load_properties(f, collections.OrderedDict)
+        texts_fr = load_properties(f)
 
     print "Reading 'texts_en.properties'..."
     with open('texts_en.properties', 'rb') as f:
-        texts_en = jprops.load_properties(f)
+        texts_en = load_properties(f)
 
     filename = 'texts_%s.properties' % args.language
-    if os.path.exists(filename):
+    if not args.assemble and os.path.exists(filename):
         print "Reading '%s'..." % filename
         with open(filename, 'rb') as f:
-            texts_target = jprops.load_properties(f)
+            texts_target = load_properties(f)
     else:
-        texts_target = {}
+        texts_target = collections.OrderedDict()
 
     print "Preparing..."
     rev_date = datetime.now(timezone('Europe/Berlin')).replace(microsecond=0).isoformat(' ')
     categories = make_categories(args.version, rev_date, args.language)
 
     print "Processing..."
-    entries_count = process_translations(texts_fr, texts_en, texts_target, categories)
+    if args.assemble:
+        entries_count = assemble_translations(texts_fr, texts_en, texts_target, categories)
+    else:
+        entries_count = disassemble_translations(texts_fr, texts_en, texts_target, categories)
 
     print "Saving..."
-    for category in categories:
-        category.save()
+    if args.assemble:
+        with open(filename, 'wb') as f:
+            for key, value in texts_target.iteritems():
+                write_property(f, key, value)
+    else:
+        for category in categories:
+            category.save()
 
     print "All done. %d entries processed." % entries_count
